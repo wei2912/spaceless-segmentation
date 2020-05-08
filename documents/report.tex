@@ -1,0 +1,502 @@
+\documentclass{article}
+\usepackage{hyperref}
+
+\title{Analysis of the statistical tokeniser}
+\author{Wei En}
+\date{December 2013}
+
+\begin{document}
+
+\begin{abstract}
+To evaluate the performance of the statistical tokeniser which I wrote
+for Google Code In 2013, I have done an analysis of the statistical,
+LRLM and RLLM tokeniser so as to compare results and identify in which
+scenarios does the statistical tokeniser perform better as compared to
+LRLM and RLLM.
+
+The Unix command, ``diff'', was used to compare the results. The LRLM
+and RLLM tokeniser is a modification of Zinc Sulfide's tokeniser
+available at
+\href{https://google-melange.appspot.com/gci/task/view/google/gci2013/5458470983696384}{Write
+a dictionary-based tokeniser for Asian languages (Chinese) {[}0{]}}.
+Both the statistical tokeniser and Zinc Sulfide's other tokeniser at
+\href{https://google-melange.appspot.com/gci/task/view/google/gci2013/6337672264024064}{Write
+a dictionary-based tokeniser for Asian languages (Chinese) {[}2{]}} will
+be merged at some time in the future.
+
+The respective tokenised files are available at
+\url{examples/cuento.zho.statistical.txt} (statistical),
+\url{examples/cuento.zho.lrlm.txt} (LRLM) and
+\url{examples/cuento.zho.rllm.txt} (RLLM). The file that contains the
+original text is available at \url{examples/cuento.zho.txt} and the
+correct tokenisation is available at
+\url{examples/cuento.zho.reference.txt}. The tokenised text was changed
+from a lattice to space tokenised text, which takes up less space and is
+human readable.
+\end{abstract}
+
+\section{Statistical tokeniser}
+
+\subsection{How it works}
+
+The statistical tokeniser takes a piece of plain text and tokenises it
+with the all possible segmentations algorithm. For example, take the
+first line of \texttt{cuento.zho.txt}:
+
+\begin{verbatim}
+小明在哪里？
+\end{verbatim}
+
+The all possible segmentations algorithm outputs the following lattice:
+
+\begin{verbatim}
+^小明/小+明/小明$ ^在/在$ ^哪里/哪里$ ^？/*？$
+\end{verbatim}
+
+The lattice format is of the following:
+
+\begin{verbatim}
+^string of text/segmentation 1/segmentation 2/...$
+\end{verbatim}
+
+It then assigns a fractional count as the tokeniser is unsure which
+segmentation is truly correct. In this case of the first segmentation,
+the tokeniser is unsure which is correct: ``小 明'' vs ``小明''. As
+such, ``小'', ``明'' and ``小明'' are assigned a fractional count of
+0.5, derived from the following formula:
+
+\[x = \frac{1}{n}\]
+
+where $x$ is the fractional count and $n$ is the number of
+segmentations.
+
+The fractional counts are accumulated and stored in a text file.
+
+Once a corpus is trained, the user supplies the text file which contains
+the accumulated fractional counts to the tokeniser and input text. The
+input text is tokenised with the all possible segmentations algorithm as
+previously seen. Each segmentation is ranked based on a score. The score
+for each token is calculated by the following formula:
+
+\[f(w) = \frac{C(w)+d}{\sum_{w'} C(w) + (\vert V\vert +1)d}\]
+
+where $f(w)$ is a function that calculates the score of the token,
+$C(w)$ is a function that returns the fractional count of the token,
+$\vert V\vert $ is the size of the vocabulary and $d$ is the discount
+value. The discount value used in this tokeniser was 0.5 but may be
+altered for weighting of unknown words.
+
+The product of all the scores of each token is taken and used as the
+score. The segmentations are then ranked according to the score and the
+segmentation with the highest score is selected.
+
+\subsection{Analysis}
+
+From
+\texttt{diff examples/cuento.zho.reference.txt examples/cuento.zho.statistical.txt}:
+
+\begin{verbatim}
+7c7
+< 小明 是 一 个 小男孩 。
+---
+> 小明 是 一个 小男孩 。
+9c9
+< 小女孩 是 他 的 妹妹 。
+---
+> 小 女孩 是 他 的 妹妹 。
+12c12
+< 小狗 很 喜欢 跟 小明 和 小红 玩 。
+---
+> 小 狗 很 喜欢 跟 小明 和 小红 玩 。
+16c16
+< 可是 ， 猫儿 在 屋子 里面 睡觉 。
+---
+> 可 是 ， 猫儿 在 屋子 里面 睡觉 。
+49c49
+< 她 现在 听 得 很 清楚 了 。
+---
+> 她 现在 听 得很 清楚 了 。
+53c53
+< 他们 两 个 开开心心 的 走进 了 屋子 。
+---
+> 他们 两 个 开 开心 心 的 走 进 了 屋子 。
+\end{verbatim}
+
+Most errors between the statistical tokeniser and the reference text can
+be easily fixed by removing certain words from a dictionary that should
+not be treated as tokens (一个 for example, where the correct
+tokenisation is 一 个) as well as adding new tokens (开开心心, 小女孩
+and 小狗 for example; all these tokens would be selected as the
+probability for longer tokens overwhelmingly dominates the probability
+for shorter tokens).
+
+Assuming that all these were fixed, the results would look like this:
+
+\begin{verbatim}
+16c16
+< 可是 ， 猫儿 在 屋子 里面 睡觉 。
+---
+> 可 是 ， 猫儿 在 屋子 里面 睡觉 。
+49c49
+< 她 现在 听 得 很 清楚 了 。
+---
+> 她 现在 听 得很 清楚 了 。
+\end{verbatim}
+
+In the first case, where ``可是'' was wrongly tokenised as ``可 是'',
+the dreaded side effect occured; as the words ``可 是'' are seen much
+more frequently than ``可是'', the ranker chooses ``可 是'' instead.
+However, ``可是'' in this context is the correct token. The context in
+this case is that ``可是'' is seen next to a comma very frequently.
+
+In the second case, the side effect of longer tokens dominating shorter
+tokens appears in this case, where context is required to determine if
+the tokenisation should be ``得很'' or ``得 很''. The statistical
+tokeniser, while providing a good estimate, is unable to rank
+segmentations based on context.
+
+As such, the statistical tokeniser performs quite well with only two
+errors. However, note that this piece of text has little ambiguity. In a
+piece of text where there is more ambiguity, for example, text from
+encyclopedias, the tokeniser may perform poorly. While it provides a
+good estimate, it may still make a few misclassifications.
+
+\section{LRLM and RLLM}
+
+\subsection{How it works}
+
+LRLM looks for the longest word possible from left to right, whereas
+RLLM looks for the longest word possible from right to left. Both are
+based on rules and are not based on any data obtained from training.
+
+\subsection{Analysis of LRLM tokeniser}
+
+From ``diff cuento.zho.reference.txt cuento.zho.lrlm.txt'':
+
+\begin{verbatim}
+7c7
+< 小明 是 一 个 小男孩 。
+---
+> 小明 是 一个 小男孩 。
+9c9
+< 小女孩 是 他 的 妹妹 。
+---
+> 小女 孩 是 他 的 妹妹 。
+12c12
+< 小狗 很 喜欢 跟 小明 和 小红 玩 。
+---
+> 小 狗 很 喜欢 跟 小明 和 小红 玩 。
+21c21
+< 小红 坐 了 下来 ， 手 都 摆 在 眼睛 前面 。
+---
+> 小红 坐了 下来 ， 手 都 摆 在 眼睛 前面 。
+29c29
+< 小红 不 知道 小明 在 哪里 。
+---
+> 小红 不知 道 小明 在 哪里 。
+38c38
+< “ 不 可以 说 啊 ， 小红 ！ ” 她 回答 。
+---
+> “ 不可 以 说 啊 ， 小红 ！ ” 她 回答 。
+49c49
+< 她 现在 听 得 很 清楚 了 。
+---
+> 她 现在 听 得很 清楚 了 。
+53c53
+< 他们 两 个 开开心心 的 走进 了 屋子 。
+---
+> 他们 两 个 开 开心 心 的 走 进 了 屋子 。
+\end{verbatim}
+
+Once again, if the dictionary errors were fixed:
+
+\begin{verbatim}
+29c29
+< 小红 不 知道 小明 在 哪里 。
+---
+> 小红 不知 道 小明 在 哪里 。
+38c38
+< “ 不 可以 说 啊 ， 小红 ！ ” 她 回答 。
+---
+> “ 不可 以 说 啊 ， 小红 ！ ” 她 回答 。
+49c49
+< 她 现在 听 得 很 清楚 了 。
+---
+> 她 现在 听 得很 清楚 了 。
+\end{verbatim}
+
+As it turns out, LRLM is not a particularly good tokenisation, while it
+may be the simplest. It is unable to use context or frequency to rank
+segmentations, instead blindly choosing the longest possible sequence.
+While it is fast and easy to apply, it may be inaccurate.
+
+\subsection{Analysis of RLLM tokeniser}
+
+From ``diff cuento.zho.reference.txt cuento.zho.rllm.txt'':
+
+\begin{verbatim}
+7c7
+< 小明 是 一 个 小男孩 。
+---
+> 小明 是 一个 小男孩 。
+9c9
+< 小女孩 是 他 的 妹妹 。
+---
+> 小 女孩 是 他 的 妹妹 。
+12c12
+< 小狗 很 喜欢 跟 小明 和 小红 玩 。
+---
+> 小 狗 很 喜欢 跟 小明 和 小红 玩 。
+21c21
+< 小红 坐 了 下来 ， 手 都 摆 在 眼睛 前面 。
+---
+> 小红 坐了 下来 ， 手 都 摆 在 眼睛 前面 。
+30c30
+< 她 问 狗儿 ： “ 你 看见 小明 了 吗 ？ ”
+---
+> 她 问 狗儿 ： “ 你 看见 小 明了 吗 ？ ”
+34c34
+< 小红 看 着 在 屋子 里面 的 妈妈 。
+---
+> 小红 看 着 在 屋子 里 面的 妈妈 。
+49c49
+< 她 现在 听 得 很 清楚 了 。
+---
+> 她 现在 听 得很 清楚 了 。
+53c53
+< 他们 两 个 开开心心 的 走进 了 屋子 。
+---
+> 他们 两 个 开 开心 心 的 走 进 了 屋子 。
+\end{verbatim}
+
+If the dictionary errors were fixed:
+
+\begin{verbatim}
+30c30
+< 她 问 狗儿 ： “ 你 看见 小明 了 吗 ？ ”
+---
+> 她 问 狗儿 ： “ 你 看见 小 明了 吗 ？ ”
+34c34
+< 小红 看 着 在 屋子 里面 的 妈妈 。
+---
+> 小红 看 着 在 屋子 里 面的 妈妈 。
+49c49
+< 她 现在 听 得 很 清楚 了 。
+---
+> 她 现在 听 得很 清楚 了 。
+\end{verbatim}
+
+As with LRLM, RLLM is not a particularly good tokenisation.
+
+\subsection{LRLM and RLLM analysis}
+
+Going more in-depth into LRLM and RLLM, let's take a look at the
+scenarios where LRLM and RLLM will not do well in.
+
+At line 29:
+
+\begin{verbatim}
+Correct: 小红 不 知道 小明 在 哪里 。
+LRLM:    小红 不知 道 小明 在 哪里 。
+RLLM:    小红 不 知道 小明 在 哪里 。
+\end{verbatim}
+
+LRLM makes a wrong guess whereas RLLM makes a correct guess.
+
+At line 30:
+
+\begin{verbatim}
+Correct: 她 问 狗儿 ： “ 你 看见 小明 了 吗 ？ ”
+LRLM:    她 问 狗儿 ： “ 你 看见 小明 了 吗 ？ ”
+RLLM:    她 问 狗儿 ： “ 你 看见 小 明了 吗 ？ ”
+\end{verbatim}
+
+In this case, the inverse occurs; LRLM makes a correct guess whereas
+RLLM makes a wrong guess.
+
+At line 34:
+
+\begin{verbatim}
+Correct: 小红 看 着 在 屋子 里面 的 妈妈 。
+LRLM:    小红 看 着 在 屋子 里面 的 妈妈 。
+RLLM:    小红 看 着 在 屋子 里 面的 妈妈 。
+\end{verbatim}
+
+LRLM makes a correct guess; RLLM makes a wrong guess.
+
+At line 38:
+
+\begin{verbatim}
+Correct: “ 不 可以 说 啊 ， 小红 ！ ” 她 回答 。
+LRLM:    “ 不可 以 说 啊 ， 小红 ！ ” 她 回答 。
+RLLM:    “ 不 可以 说 啊 ， 小红 ！ ” 她 回答 。
+\end{verbatim}
+
+LRLM makes a wrong guess, RLLM makes a correct guess.
+
+At line 49:
+
+\begin{verbatim}
+Correct: 她 现在 听 得 很 清楚 了 。
+LRLM:    她 现在 听 得很 清楚 了 。
+RLLM:    她 现在 听 得很 清楚 了 。
+\end{verbatim}
+
+This is more interesting; LRLM and RLLM both fail to make the correct
+tokenisation, as well as the statistical tokeniser. This shows once
+again the importance of context in ranking segmentations.
+
+Totaling up the scores, both LRLM and RLLM have a score of 2/5 correct
+guesses for the above 5 scenarios. While more data is required, it can
+be concluded that both are approximately equally good guesses. However,
+a more complex method is required for a more accurate tokenisation.
+
+\section{Limitations of the statistical tokeniser}
+
+It is shown here that the statistical tokeniser has a lower error rate
+as compared to the LRLM and RLLM tokeniser. However, it has a few
+limitations which will be discussed now.
+
+As mentioned above, the statistical tokeniser is unable to rank
+segmentations using context, which is required for resolving the below
+scenario:
+
+\begin{verbatim}
+Line 49
+Correct:     她 现在 听 得 很 清楚 了 。
+LRLM:        她 现在 听 得很 清楚 了 。
+RLLM:        她 现在 听 得很 清楚 了 。
+Statistical: 她 现在 听 得很 清楚 了 。
+\end{verbatim}
+
+as well as this scenario:
+
+\begin{verbatim}
+Line 16
+Correct:     可是 ， 猫儿 在 屋子 里面 睡觉 。
+LRLM:        可是 ， 猫儿 在 屋子 里面 睡觉 。
+RLLM:        可是 ， 猫儿 在 屋子 里面 睡觉 。
+Statistical: 可 是 ， 猫儿 在 屋子 里面 睡觉 。
+\end{verbatim}
+
+In the case of ``可是'', the word appears very often before a comma,
+showing that punctuation should be treated as tokens as well. As such,
+the dictionary needs to be fixed to include punctuation tokens.
+
+An ideal solution should rank segmentations using context
+and frequency. In the next section, we will discuss one such possible
+solution.
+
+\section{Ideas for future work}
+
+In the training procedure, text is tokenised with the all possible
+segmentations algorithm and POS tagged as well.
+
+\begin{verbatim}
+^小明/小<adj>+明<adj>/小<adj>+明<n>/小<adj>+明<vblex>/小明<np>$ ^在/在<adv>/在<pr>/在<pre>/在<vblex>$ ^哪里/哪里<adv>/哪里<ij>/哪里<prn>$ ^？/*？$ 
+\end{verbatim}
+
+2 bigram models (technically, bi-unit) are built from the tokenised text. The first one takes in words while the second one takes in POS tags.
+
+\subsection{Word model}
+
+In the word model, POS tags are ignored. As such, the following segmentations are observed:
+
+\begin{verbatim}
+^小明/小+明/小明$ ^在/在$ ^哪里/哪里$ ^？/*？$ 
+\end{verbatim}
+
+The possible tokenisations are the following:
+
+\begin{verbatim}
+START 小+明 在 哪里 ？ END
+START 小明  在 哪里 ？ END
+\end{verbatim}
+
+The invalid token, a question mark in this case, is included in the bigram model as it may provide useful information.
+
+We group the uncertain segmentations as one unit.
+
+The following counts are obtained:
+
+\begin{verbatim}
+START 小+明: 1 * 0.5 * 0.5 = 0.25
+START 小明: 1 * 0.5 = 0.5
+小+明 在: 0.5 * 0.5 * 1 = 0.25
+小明 在: 0.5 * 1 = 0.5
+在 哪里: 1 * 1 = 1
+哪里 ？: 1 * 1 = 1
+? END: 1 * 1 = 1
+\end{verbatim}
+
+In the first example, "START" is a marker for the start of a line. As we are of course certain that it is correct, we assign a fractional count of 1.
+"小+明" is a possible segmentation of "小明".
+As there are 2 possible segmentations and the segmentation is comprised of 2 tokens, we assign a fractional count of 0.5 * 0.5 to "小+明". This behaviour penalises tokens comprised of more words as the longer tokenisation is usually correct. Context will reverse the effect if the correct tokenisation should be the case with more words.
+The final fractional count is obtained from the product of both counts, leaving us with 0.5.
+
+In the second example, we are certain that "START" is correct, so we assign a fractional count of 1.
+"小明" is a possible segmentation of "小明".
+Once again, with 2 possible segmentations, we assign a fractional count of 0.5.
+The final fractional count is the same; 0.5.
+
+The same goes for the rest of the examples.
+
+\subsection{POS tag model}
+
+In the POS tag model, words are ignored. As such, the following segmentations are observed:
+
+\begin{verbatim}
+^小明/adj+adj/adj+n/adj+vblex/np$ ^在/adv/pr/pre/vblex$ ^哪里/adv/ij/prn$ ^？/*？$ 
+\end{verbatim}
+
+The possible tokenisations are the following:
+
+\begin{verbatim}
+START adj+adj adv adv * END
+START adj+n adv adv * END
+START adj+vblex adv adv * END
+START adj+np adv adv * END
+.
+.
+.
+\end{verbatim}
+
+The invalid token, a question mark, was ignored as its POS tag is unknown and replaced with an invalid.
+
+As there are many possible sequences of POS tags, only the first 4 were shown.
+
+The following counts are obtained (showing only the first example):
+
+\begin{verbatim}
+START adj+adj: 1 * 0.25 * 0.25 = 0.0625
+adj+adj adv: 0.25 * 0.25 * 0.25 = 0.015625
+adv adv: 0.25 * 0.333... = 0.08333...
+\end{verbatim}
+
+Fractional counts are determined by the same way as shown in the word model.
+Any bigrams with invalid tokens are not added as they provide no useful information.
+
+\subsection{Ranking segmentations}
+
+\begin{verbatim}
+^小明/小<adj>+明<adj>/小<adj>+明<n>/小<adj>+明<vblex>/小明<np>$ ^在/在<adv>/在<pr>/在<pre>/在<vblex>$ ^哪里/哪里<adv>/哪里<ij>/哪里<prn>$ ^？/*？$ 
+\end{verbatim}
+
+This piece of tokenised text produces a number of sequences. For our purpose, we will look at the first sequence:
+
+\begin{verbatim}
+小<adj>+明<adj> 在<adv> 哪里<adv> ?<*>
+\end{verbatim}
+
+To calculate the probability, we use the following formulas:
+
+\[p(w_1, w_2, w_3...) = p(w_1|w_2) * p(w_2|w_3)...\]
+\[p(t_1, t_2, t_3...) = p(t_1|t_2) * p(t_2|t_3)...\]
+
+$w_1$, $w_2$ etc. represent words while $t_1$, $t_2$ etc. represent POS tags.
+
+The final score is obtained from the following:
+
+\[f(score) = p(w_1, w_2, w_3...) * p(t_1, t_2, t_3...)\]
+
+\end{document}
